@@ -306,7 +306,13 @@ const char* errorstring(error e)
         case API_EGOINGOVERQUOTA:
             return "Not enough quota";
         case API_EMFAREQUIRED:
-            return "Required 2FA pin";
+            return "Multi-factor authentication required";
+        case API_EMASTERONLY:
+            return "Access denied for users";
+        case API_EBUSINESSPASTDUE:
+            return "Business account has expired";
+        case API_EPAYWALL:
+            return "Over Disk Quota Paywall";
         default:
             return "Unknown error";
     }
@@ -367,7 +373,8 @@ AppFilePut::~AppFilePut()
 
 void AppFilePut::displayname(string* dname)
 {
-    *dname = localname.toName(*transfer->client->fsaccess);
+    *dname = localname;
+    transfer->client->fsaccess->local2name(dname, client->fsaccess->getFilesystemType(dname));
 }
 
 // transfer progress callback
@@ -409,10 +416,17 @@ void DemoApp::transfer_update(Transfer* /*t*/)
     // (this is handled in the prompt logic)
 }
 
-void DemoApp::transfer_failed(Transfer* t, error e, dstime)
+void DemoApp::transfer_failed(Transfer* t, const Error& e, dstime)
 {
     displaytransferdetails(t, "failed (");
-    cout << errorstring(e) << ")" << endl;
+    if (e == API_ETOOMANY && e.hasExtraInfo())
+    {
+         cout << getExtraInfoErrorString(e) << ")" << endl;
+    }
+    else
+    {
+        cout << errorstring(e) << ")" << endl;
+    }
 }
 
 void DemoApp::transfer_complete(Transfer* t)
@@ -649,7 +663,8 @@ AppFileGet::AppFileGet(Node* n, handle ch, byte* cfilekey, m_off_t csize, m_time
         name = *cfilename;
     }
 
-    localname = LocalPath::fromName(name, *client->fsaccess);
+    localname = name;
+    client->fsaccess->name2local(&localname, client->fsaccess->getFilesystemType(&localname));
     if (!targetfolder.empty())
     {
         string s = targetfolder;
@@ -672,9 +687,10 @@ AppFilePut::AppFilePut(const LocalPath& clocalname, handle ch, const char* ctarg
     targetuser = ctargetuser;
 
     // erase path component
-    name = clocalname.toPath(*client->fsaccess);
-    client->fsaccess->local2name(&name);
-    client->fsaccess->local2name(&separator);
+    name = *clocalname;
+    FileSystemType fileSystemType = client->fsaccess->getFilesystemType(clocalname);
+    client->fsaccess->local2name(&name, fileSystemType);
+    client->fsaccess->local2name(&separator,fileSystemType);
 
     name.erase(0, name.find_last_of(*separator.c_str()) + 1);
 }
@@ -1111,11 +1127,18 @@ void DemoApp::unlink_result(handle, error e)
     }
 }
 
-void DemoApp::fetchnodes_result(error e)
+void DemoApp::fetchnodes_result(const Error& e)
 {
     if (e)
     {
-        cout << "File/folder retrieval failed (" << errorstring(e) << ")" << endl;
+        if (e == API_ENOENT && e.hasExtraInfo())
+        {
+            cout << "File/folder retrieval failed: " << getExtraInfoErrorString(e) << endl;
+        }
+        else
+        {
+            cout << "File/folder retrieval failed (" << errorstring(e) << ")" << endl;
+        }
         pdf_to_import = false;
     }
     else
@@ -1395,6 +1418,22 @@ void DemoApp::delua_result(error e)
         cout << "Success." << endl;
     }
 }
+
+void DemoApp::senddevcommand_result(int value)
+{
+    cout << "Dev subcommand finished with code: " << value << endl;
+}
+
+void exec_devcommand(autocomplete::ACState& s)
+{
+    const char *email = nullptr;
+    if (s.words.size() == 3)
+    {
+        email = s.words[2].s.c_str();
+    }
+    const char *subcommand = s.words[1].s.c_str();
+    client->senddevcommand(subcommand, email);
+}
 #endif
 
 
@@ -1409,6 +1448,35 @@ void DemoApp::notify_retry(dstime dsdelta, retryreason_t)
     {
         cout << "Retried API request completed" << endl;
     }
+}
+
+string DemoApp::getExtraInfoErrorString(const Error& e)
+{
+    string textError;
+
+    if (e.getUserStatus() == 7)
+    {
+        textError.append("User status is suspended due to ETD. ");
+    }
+
+    textError.append("Link status is: ");
+    switch (e.getLinkStatus())
+    {
+        case 0:
+            textError.append("Undeleted");
+            break;
+        case 1:
+            textError.append("Deleted/down");
+            break;
+        case 2:
+            textError.append("Down due to an ETD specifically");
+            break;
+        default:
+            textError.append("Unknown link status");
+            break;
+    }
+
+    return textError;
 }
 
 static void store_line(char*);
@@ -2493,18 +2561,20 @@ bool recursiveCompare(Node* mn, fs::path p)
         return true;
     }
 
+    std::string path = p.u8string();
+    FileSystemType fileSystemType = client->fsaccess->getFilesystemType(&path);
     multimap<string, Node*> ms;
     multimap<string, fs::path> ps;
     for (auto& m : mn->children)
     {
         string leafname = m->displayname();
-        client->fsaccess->escapefsincompatible(&leafname);
+        client->fsaccess->escapefsincompatible(&leafname, fileSystemType);
         ms.emplace(leafname, m);
     }
     for (fs::directory_iterator pi(p); pi != fs::directory_iterator(); ++pi)
     {
         auto leafname = pi->path().filename().u8string();
-        client->fsaccess->escapefsincompatible(&leafname);
+        client->fsaccess->escapefsincompatible(&leafname, fileSystemType);
         ps.emplace(leafname, pi->path());
     }
 
@@ -2686,6 +2756,11 @@ void exec_getuserquota(autocomplete::ACState& s)
     }    
 
     client->getaccountdetails(new AccountDetails, storage, transfer, pro, false, false, false, -1);
+}
+
+void exec_getuserdata(autocomplete::ACState& s)
+{
+    client->getuserdata();
 }
 
 void exec_querytransferquota(autocomplete::ACState& ac)
@@ -2889,6 +2964,7 @@ autocomplete::ACN autocompleteSyntax()
 #endif
     p->Add(exec_smsverify, sequence(text("smsverify"), either(sequence(text("send"), param("phonenumber"), opt(param("reverifywhitelisted"))), sequence(text("code"), param("verificationcode")))));
     p->Add(exec_verifiedphonenumber, sequence(text("verifiedphone")));
+    p->Add(exec_resetverifiedphonenumber, sequence(text("resetverifiedphone")));
     p->Add(exec_mkdir, sequence(text("mkdir"), opt(flag("-allowduplicate")), opt(flag("-exactleafname")), remoteFSFolder(client, &cwd)));
     p->Add(exec_rm, sequence(text("rm"), remoteFSPath(client, &cwd), opt(sequence(flag("-regexchild"), param("regex")))));
     p->Add(exec_mv, sequence(text("mv"), remoteFSPath(client, &cwd, "src"), remoteFSPath(client, &cwd, "dst")));
@@ -2911,6 +2987,7 @@ autocomplete::ACN autocompleteSyntax()
     p->Add(exec_putua, sequence(text("putua"), param("attrname"), opt(either(text("del"), sequence(text("set"), param("string")), sequence(text("load"), localFSFile())))));
 #ifdef DEBUG
     p->Add(exec_delua, sequence(text("delua"), param("attrname")));
+    p->Add(exec_devcommand, sequence(text("devcommand"), param("subcommand"), opt(param("email"))));
 #endif
     p->Add(exec_alerts, sequence(text("alerts"), opt(either(text("new"), text("old"), wholenumber(10), text("notify"), text("seen")))));
     p->Add(exec_recentactions, sequence(text("recentactions"), param("hours"), param("maxcount")));
@@ -2996,6 +3073,7 @@ autocomplete::ACN autocompleteSyntax()
     p->Add(exec_querytransferquota, sequence(text("querytransferquota"), param("filesize")));
     p->Add(exec_getcloudstorageused, sequence(text("getcloudstorageused")));
     p->Add(exec_getuserquota, sequence(text("getuserquota"), repeat(either(flag("-storage"), flag("-transfer"), flag("-pro")))));
+    p->Add(exec_getuserdata, text("getuserdata"));
 
     p->Add(exec_showattributes, sequence(text("showattributes"), remoteFSPath(client, &cwd)));
 
@@ -6955,7 +7033,7 @@ void DemoApp::exportnode_result(handle h, handle ph)
 }
 
 // the requested link could not be opened
-void DemoApp::openfilelink_result(error e)
+void DemoApp::openfilelink_result(const Error& e)
 {
     if (e)
     {
@@ -6965,7 +7043,15 @@ void DemoApp::openfilelink_result(error e)
         }
         else
         {
-            cout << "Failed to open link: " << errorstring(e) << endl;
+            if (e == API_ETOOMANY && e.hasExtraInfo())
+            {
+                cout << "Failed to open link: " << getExtraInfoErrorString(e) << endl;
+            }
+            else
+            {
+                cout << "Failed to open link: " << errorstring(e) << endl;
+            }
+
         }
     }
     pdf_to_import = false;
@@ -7149,9 +7235,16 @@ void DemoApp::folderlinkinfo_result(error e, handle owner, handle /*ph*/, string
     publiclink.clear();
 }
 
-void DemoApp::checkfile_result(handle /*h*/, error e)
+void DemoApp::checkfile_result(handle /*h*/, const Error& e)
 {
-    cout << "Link check failed: " << errorstring(e) << endl;
+    if (e == API_ETOOMANY && e.hasExtraInfo())
+    {
+         cout << "Link check failed: " << getExtraInfoErrorString(e) << endl;
+    }
+    else
+    {
+        cout << "Link check failed: " << errorstring(e) << endl;
+    }
 }
 
 void DemoApp::checkfile_result(handle h, error e, byte* filekey, m_off_t size, m_time_t /*ts*/, m_time_t tm, string* filename,
@@ -7208,9 +7301,9 @@ bool DemoApp::pread_data(byte* data, m_off_t len, m_off_t pos, m_off_t, m_off_t,
     return true;
 }
 
-dstime DemoApp::pread_failure(error e, int retry, void* /*appdata*/, dstime)
+dstime DemoApp::pread_failure(const Error &e, int retry, void* /*appdata*/, dstime)
 {
-    if (retry < 5)
+    if (retry < 5 && !(e == API_ETOOMANY && e.hasExtraInfo()))
     {
         cout << "Retrying read (" << errorstring(e) << ", attempt #" << retry << ")" << endl;
         return (dstime)(retry*10);
@@ -7598,6 +7691,18 @@ void DemoApp::userattr_update(User* u, int priv, const char* n)
           << n << " added or updated" << endl;
 }
 
+void DemoApp::resetSmsVerifiedPhoneNumber_result(error e)
+{
+    if (e)
+    {
+        cout << "Reset verified phone number failed: " << e << endl;
+    }
+    else
+    {
+        cout << "Reset verified phone number succeeded" << endl;
+    }
+}
+
 #ifndef NO_READLINE
 char* longestCommonPrefix(ac::CompletionState& acs)
 {
@@ -7896,11 +8001,19 @@ void DemoAppFolder::login_result(error e)
     }
 }
 
-void DemoAppFolder::fetchnodes_result(error e)
+void DemoAppFolder::fetchnodes_result(const Error& e)
 {
     if (e)
     {
-        cout << "File/folder retrieval failed (" << errorstring(e) << ")" << endl;
+        if (e == API_ENOENT && e.hasExtraInfo())
+        {
+            cout << "File/folder retrieval failed: " << getExtraInfoErrorString(e) << endl;
+        }
+        else
+        {
+            cout << "File/folder retrieval failed (" << errorstring(e) << ")" << endl;
+        }
+
         pdf_to_import = false;
     }
     else
@@ -8022,3 +8135,7 @@ void exec_metamac(autocomplete::ACState& s)
     }
 }
 
+void exec_resetverifiedphonenumber(autocomplete::ACState& s)
+{
+    client->resetSmsVerifiedPhoneNumber();
+}

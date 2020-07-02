@@ -692,6 +692,8 @@ Sync::Sync(MegaClient* cclient, SyncConfig config, const char* cdebris,
     fsstableids = dirnotify->fsstableids();
     LOG_info << "Filesystem IDs are stable: " << fsstableids;
 
+    mFilesystemType = client->fsaccess->getFilesystemType(&mLocalPath);
+
     localroot->init(this, FOLDERNODE, NULL, crootpath, nullptr);  // the root node must have the absolute path.  We don't store shortname, to avoid accidentally using relative paths.
     localroot->setnode(remotenode);
 
@@ -1153,14 +1155,7 @@ bool Sync::scan(LocalPath* localpath, FileAccess* fa)
                             l = checkpath(NULL, localpath, nullptr, nullptr, false, da);
                         }
 
-                        if (l && l != (LocalNode*)~0)
-                        {
-                            if (l->sync->getConfig().forceOverwrite())
-                            {
-                                l->mSyncable = true;
-                            }
-                        }
-                        else
+                        if (!l || l == (LocalNode*)~0)
                         {
                             // new record: place in notification queue
                             dirnotify->notify(DirNotify::DIREVENTS, NULL, LocalPath(*localpath));
@@ -1256,7 +1251,7 @@ LocalNode* Sync::checkpath(LocalNode* l, LocalPath* input_localpath, string* con
         }
 
         string name = newname.size() ? newname : l->name;
-        client->fsaccess->local2name(&name);
+        client->fsaccess->local2name(&name, mFilesystemType);
 
         if (!client->app->sync_syncable(this, name.c_str(), tmppath))
         {

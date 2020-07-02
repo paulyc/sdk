@@ -702,7 +702,7 @@ void WinFileSystemAccess::tmpnamelocal(LocalPath& localname) const
     char buf[128];
 
     sprintf(buf, ".getxfer.%lu.%u.mega", GetCurrentProcessId(), tmpindex++);
-    localname = LocalPath::fromName(buf, *this);
+    localname = LocalPath::fromName(buf, *this, FS_UNKNOWN);
 }
 
 // convert UTF-8 to Windows Unicode

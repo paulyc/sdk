@@ -468,7 +468,7 @@ void SyncFileGet::prepare()
 {
     if (transfer->localfilename.empty())
     {
-        LocalPath tmpname = LocalPath::fromName("tmp", *sync->client->fsaccess);
+        LocalPath tmpname = LocalPath::fromName("tmp", *sync->client->fsaccess, sync->mFilesystemType);
 
         if (!sync->tmpfa)
         {
@@ -485,7 +485,7 @@ void SyncFileGet::prepare()
                 sync->client->fsaccess->mkdirlocal(transfer->localfilename);
 
                 // lock it
-                LocalPath lockname = LocalPath::fromName("lock", *sync->client->fsaccess);
+                LocalPath lockname = LocalPath::fromName("lock", *sync->client->fsaccess, sync->mFilesystemType);
                 transfer->localfilename.separatorAppend(lockname, *sync->client->fsaccess, true);
 
                 if (sync->tmpfa->fopen(transfer->localfilename, false, true))
@@ -566,7 +566,7 @@ void SyncFileGet::updatelocalname()
         if (n->parent && n->parent->localnode)
         {
             localname = n->parent->localnode->getLocalPath();
-            localname.separatorAppend(LocalPath::fromName(ait->second, *sync->client->fsaccess), *sync->client->fsaccess, true);
+            localname.separatorAppend(LocalPath::fromName(ait->second, *sync->client->fsaccess, sync->mFilesystemType), *sync->client->fsaccess, true);
         }
     }
 }
