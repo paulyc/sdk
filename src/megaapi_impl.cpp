@@ -1180,6 +1180,11 @@ bool MegaApiImpl::is_syncable(Sync *sync, const char *name, const LocalPath& loc
         return false;
     }
 
+    if (Sync::IGNOREFILE_NAME == name)
+    {
+        return true;
+    }
+
     if (wildcardMatch(name, excludedNames))
     {
         return false;
@@ -1393,15 +1398,31 @@ MegaSync *MegaApiImpl::getSyncByPath(const char *localPath)
 
 char *MegaApiImpl::getBlockedPath()
 {
-    char *path = NULL;
-    sdkMutex.lock();
+    SdkMutexGuard guard(sdkMutex);
+
+    if (client->ignoreFileFailures.size())
+    {
+        // for convenience.
+        const auto& node =
+          *client->ignoreFileFailures.front();
+
+        const string path =
+          node.ignoreFilePath().toPath(*fsAccess);
+
+        return MegaApi::strdup(path.c_str());
+    }
+
     if (!client->blockedfile.empty())
     {
-        path = MegaApi::strdup(client->blockedfile.toPath(*fsAccess).c_str());
+        const string path =
+          client->blockedfile.toPath(*fsAccess);
+
+        return MegaApi::strdup(path.c_str());
     }
-    sdkMutex.unlock();
-    return path;
+
+    return nullptr;
 }
+
 #endif
 
 MegaBackup *MegaApiImpl::getBackupByTag(int tag)
@@ -22007,6 +22028,17 @@ void MegaApiImpl::update()
 int MegaApiImpl::isWaiting()
 {
 #ifdef ENABLE_SYNC
+    if (client->ignoreFileFailures.size())
+    {
+        const auto& node =
+          *client->ignoreFileFailures.front();
+
+        LOG_debug << "SDK waiting for an ignore file to load: "
+                  << node.ignoreFilePath().editStringDirect();
+
+        return RETRY_IGNORE_FILE;
+    }
+
     if (client->syncfslockretry || client->syncfsopsfailed)
     {
         LOG_debug << "SDK waiting for a blocked file: " << client->blockedfile.toPath(*fsAccess);
